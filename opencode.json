@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "clima": {
+      "type": "local",
+      "command": ["docker", "run", "--rm", "-i", "mcp-project:latest"],
+      "enabled": true
+    }
+  }
+}
