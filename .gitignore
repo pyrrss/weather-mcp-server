@@ -1,0 +1,28 @@
+# Paquetes de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Herramientas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Opencode
+.opencode/
+
+# Logs
+*.log
+
+# Sistema
+.DS_Store

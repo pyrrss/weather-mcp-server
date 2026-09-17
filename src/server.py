@@ -11,18 +11,18 @@ logger = logging.getLogger(__name__)
 mcp = MCPServer()
 
 
-NWS_API_BASE = "https://api.weather.gov"
-USER_AGENT = "weather-app/1.0"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+TIMEZONE = "America/Santiago"
 
-# -- HELPERS --
-async def get_weather_data(url: str) -> dict[str, Any] | None:
+
+async def get_json(url: str, params: dict[str, Any]) -> dict[str, Any] | None:
     """
-    Hace una request HTTP a API NWS para obtener datos de clima.
+    Hace una request HTTP GET a la API de Open-Meteo y devuelve el JSON.
     """
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/geo+json"}
     async with httpx2.AsyncClient() as client:
         try:
-            response = await client.get(url, headers=headers, timeout=30.0)
+            response = await client.get(url, params=params, timeout=30.0)
             response.raise_for_status()
             return response.json()
 
@@ -30,74 +30,84 @@ async def get_weather_data(url: str) -> dict[str, Any] | None:
             logger.error(f"Error obteniendo datos de clima: {e}")
             return None
 
-def format_alert(feature: dict) -> str:
-    """
-    Formatea una alerta de clima en un string legible.
-    """
-    properties = feature["properties"]
-    return f"""
-    Alerta: {properties.get("event", "Desconocida")}
-    Area: {properties.get("areaDesc", "Desconocida")}
-    Severidad: {properties.get("severity", "Desconocida")}
-    Descripción: {properties.get("description", "No disponible")}
-    Instrucciones: {properties.get("instruction", "No disponible")}
-    """
-
 
 # -- TOOLS --
 @mcp.tool()
-async def get_alerts(state: str) -> str:
+async def search_location(city: str) -> str:
     """
-    Obtiene alertas de clima para un estado específico de EE.UU usando API de NWS.
+    Busca una ubicación por nombre y devuelve sus coordenadas.
 
     Args:
-        state (str): Código de dos letras del estado (e.g. CA, NY)
+        city (str): Nombre de la ciudad (e.g. "Santiago", "Valparaíso").
 
     """
-    url = f"{NWS_API_BASE}/alerts/active/area/{state}"
-    data = await get_weather_data(url)
-    
-    if not data or "features" not in data:
-        return f"No se pudieron obtener alertas para el estado {state}."
-    
-    if not data["features"]:
-        return f"No hay alertas activas para el estado {state}."
+    params = {"name": city, "count": 5, "language": "es", "countryCode": "CL"}
+    data = await get_json(GEOCODING_URL, params)
 
-    alerts = [format_alert(feature) for feature in data["features"]]
-    return "\n---\n".join(alerts)
+    if not data or not data.get("results"):
+        return f"No se encontró ninguna ubicación en Chile para '{city}'."
+
+    results = []
+    for result in data["results"]:
+        location = (
+            f"{result['name']} ({result.get('admin1', '')}, {result.get('country', '')}): "
+            f"lat {result['latitude']}, lon {result['longitude']}"
+        )
+        results.append(location)
+
+    return "\n".join(results)
+
 
 @mcp.tool()
 async def get_forecast(latitude: float, longitude: float) -> str:
     """
-    Obtiene pronóstico del clima para una ubicación específica usando API de NWS.
-    
+    Obtiene el pronóstico del clima para una ubicación específica usando Open-Meteo.
+
     Args:
         latitude (float): Latitud de la ubicación.
         longitude (float): Longitud de la ubicación.
+
     """
-    points_url = f"{NWS_API_BASE}/points/{latitude},{longitude}"
-    points_data = await get_weather_data(points_url)
-    
-    if not points_data:
-        return "No se pudo obtener información de pronóstico para la ubicación especificada."
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "timezone": TIMEZONE,
+        "forecast_days": 7,
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "kmh",
+        "precipitation_unit": "mm",
+        "current": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max",
+    }
+    data = await get_json(FORECAST_URL, params)
 
-    forecast_url = points_data["properties"]["forecast"]
-    forecast_data = await get_weather_data(forecast_url)
+    if not data:
+        return "No se pudo obtener el pronóstico del clima para la ubicación especificada."
 
-    if not forecast_data:
-        return "No se pudo obtener el pronóstico del clima"
-
-    periods = forecast_data["properties"]["periods"]
     forecasts = []
-    for period in periods:
+
+    current = data.get("current", {})
+    if current:
+        current_forecast = (
+            "Condiciones actuales:\n"
+            f"Temperatura: {current['temperature_2m']}°C\n"
+            f"Humedad: {current.get('relative_humidity_2m', '-')}%\n"
+            f"Viento: {current.get('wind_speed_10m', '-')} km/h\n"
+            f"Precipitación: {current.get('precipitation', '-')} mm"
+        )
+        forecasts.append(current_forecast)
+
+    daily = data.get("daily", {})
+    days = daily.get("time", [])
+    for index in range(len(days)):
         forecast = f"""
-        {period['name']}:
-        Temperatura: {period['temperature']}°{period['temperatureUnit']}
-        Viento: {period['windSpeed']} {period['windDirection']}
-        Pronóstico: {period['detailedForecast']}
+        {days[index]}:
+        Temperatura: {daily['temperature_2m_min'][index]}°C / {daily['temperature_2m_max'][index]}°C
+        Precipitación: {daily['precipitation_sum'][index]} mm
+        Viento máx: {daily['wind_speed_10m_max'][index]} km/h
         """
         forecasts.append(forecast)
-    
+
     return "\n---\n".join(forecasts)
 
 
